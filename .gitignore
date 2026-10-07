@@ -1,0 +1,36 @@
+# Virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Secrets
+.env
+.env.local
+.env.*
+
+# Keep the example environment file
+!.env.example
+
+# Raw downloaded dataset
+data/raw/*.json
+
+# Ignore intermediate processed datasets
+data/processed/*.csv
+
+# Keep final research datasets
+!data/processed/mbpp_100_final_5sec.csv
+!data/processed/mbpp_task_level_final.csv
+
+# Reports
+reports/*.csv
+
+# Ignore generated model files
+models/*.joblib
+
+# Keep final trained model
+!models/greenmetric_rf_final.joblib
+
+# VS Code
+.vscode/

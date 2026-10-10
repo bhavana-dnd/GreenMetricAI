@@ -149,3 +149,39 @@ def test_candidate_at_energy_threshold_is_accepted(monkeypatch):
 
     assert result["optimized_code"].strip() == candidate_code.strip()
     assert result["history"][0]["accepted"] is True
+
+
+def test_candidate_failing_mbpp_is_rejected_even_with_lower_energy(monkeypatch):
+    import greenmetricai.optimizer as optimizer
+
+    original_code = "def answer():\n    return 42\n"
+    candidate_code = "def answer():\n    return 100\n"
+
+    class FakeModel:
+        def __init__(self):
+            self.predictions = iter([0.100, 0.050])
+
+        def predict(self, metrics):
+            return next(self.predictions)
+
+    class FakeProvider:
+        def generate(self, prompt):
+            return candidate_code
+
+    monkeypatch.setattr(
+        optimizer,
+        "validate_mbpp_candidate",
+        lambda *args, **kwargs: (False, "MBPP tests failed"),
+    )
+
+    result = optimizer.optimize_mbpp_task(
+        task={"task_id": 999, "code": original_code},
+        model=FakeModel(),
+        provider=FakeProvider(),
+        rounds=1,
+        min_improvement=0.03,
+    )
+
+    assert result["optimized_code"].strip() == original_code.strip()
+    assert result["history"][0]["tests_passed"] is False
+    assert result["history"][0]["accepted"] is False

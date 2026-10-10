@@ -215,3 +215,55 @@ def test_optimizer_rejects_invalid_syntax_and_preserves_original():
     assert len(result["history"]) == 1
     assert result["history"][0]["accepted"] is False
     assert "syntax_error" in result["history"][0]["reason"]
+
+
+def test_optimizer_retries_after_candidate_fails_mbpp(monkeypatch):
+    import greenmetricai.optimizer as optimizer
+
+    original_code = "def answer():\n    return 42\n"
+    bad_candidate = "def answer():\n    return 100\n"
+    good_candidate = "def answer():\n    return 42  # optimized\n"
+
+    class FakeModel:
+        def __init__(self):
+            self.predictions = iter([0.100, 0.050, 0.090])
+
+        def predict(self, metrics):
+            return next(self.predictions)
+
+    class FakeProvider:
+        def __init__(self):
+            self.calls = 0
+
+        def generate(self, prompt):
+            self.calls += 1
+            if self.calls == 1:
+                return bad_candidate
+            return good_candidate
+
+    provider = FakeProvider()
+    validation_calls = iter([
+        (False, "MBPP tests failed"),
+        (True, None),
+    ])
+
+    monkeypatch.setattr(
+        optimizer,
+        "validate_mbpp_candidate",
+        lambda *args, **kwargs: next(validation_calls),
+    )
+
+    result = optimizer.optimize_mbpp_task(
+        task={"task_id": 999, "code": original_code},
+        model=FakeModel(),
+        provider=provider,
+        rounds=2,
+        min_improvement=0.03,
+    )
+
+    assert provider.calls == 2
+    assert len(result["history"]) == 2
+    assert result["history"][0]["accepted"] is False
+    assert result["history"][0]["tests_passed"] is False
+    assert result["history"][1]["accepted"] is True
+    assert result["optimized_code"].strip() == good_candidate.strip()

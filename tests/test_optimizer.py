@@ -185,3 +185,33 @@ def test_candidate_failing_mbpp_is_rejected_even_with_lower_energy(monkeypatch):
     assert result["optimized_code"].strip() == original_code.strip()
     assert result["history"][0]["tests_passed"] is False
     assert result["history"][0]["accepted"] is False
+
+
+def test_optimizer_rejects_invalid_syntax_and_preserves_original():
+    from greenmetricai.optimizer import optimize_mbpp_task
+
+    original_code = "def answer():\n    return 42\n"
+    invalid_candidate = "def answer(:\n    return 100\n"
+
+    class FakeModel:
+        def predict(self, metrics):
+            return 1e-10
+
+    class FakeProvider:
+        def generate(self, prompt):
+            return invalid_candidate
+
+    result = optimize_mbpp_task(
+        task={
+            "task_id": 999,
+            "code": original_code,
+        },
+        model=FakeModel(),
+        provider=FakeProvider(),
+        rounds=1,
+    )
+
+    assert result["optimized_code"] == original_code
+    assert len(result["history"]) == 1
+    assert result["history"][0]["accepted"] is False
+    assert "syntax_error" in result["history"][0]["reason"]

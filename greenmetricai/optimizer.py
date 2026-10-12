@@ -462,7 +462,7 @@ def optimize_mbpp_task(
                 }
             )
 
-            break
+            continue
 
         # --------------------------------------------------
         # Syntax validation
@@ -487,7 +487,7 @@ def optimize_mbpp_task(
                 }
             )
 
-            break
+            continue
 
         # --------------------------------------------------
         # Extract candidate features
@@ -519,7 +519,7 @@ def optimize_mbpp_task(
                 }
             )
 
-            break
+            continue
 
         # --------------------------------------------------
         # Calculate predicted improvement
@@ -618,8 +618,8 @@ def optimize_mbpp_task(
             )
 
         else:
-
-            break
+            
+            continue
 
     return {
         "original_code": original_code,

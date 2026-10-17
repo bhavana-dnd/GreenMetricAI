@@ -11,3 +11,4 @@ psutil>=6.0
 joblib>=1.4
 openai>=1.50
 pytest>=8.0
+google-genai

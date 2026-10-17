@@ -287,6 +287,23 @@ def optimize_mbpp_task(
                 }
             )
             continue
+        try:
+            candidate_metrics = extract_code_metrics(candidate)
+            candidate_energy = model.predict(candidate_metrics)
+        except Exception as exc:
+            history.append(
+                {
+                    "round": round_number,
+                    "accepted": False,
+                    "reason": f"metric_error: {exc}",
+                }
+            )
+            continue
+
+        improvement = (
+            (current_energy - candidate_energy)
+            / max(abs(current_energy), 1e-30)
+        )
 
         improvement = (
             (current_energy - candidate_energy)
@@ -335,6 +352,11 @@ def optimize_mbpp_task(
         )
         print(f"Predicted improvement: {improvement * 100:.4f}%")
         print(f"Accepted: {accepted}")
+
+        if accepted:
+            current_code = candidate
+            current_metrics = candidate_metrics
+            current_energy = candidate_energy
 
         if accepted:
             current_code = candidate

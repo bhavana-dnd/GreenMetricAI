@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-
+import json
 import pandas as pd
 
 from greenmetricai.dataset import determine_duration_repeats
@@ -122,7 +122,31 @@ def main():
         raise RuntimeError(
             f"Candidate failed validation: {candidate_reason}"
         )
+    # Save the exact source code used in this benchmark.
+    code_artifact = {
+        "task_id": args.task_id,
+        "original_code": original_task["code"],
+        "optimized_code": candidate_code,
+        "candidate_different": (
+            candidate_code.strip() != original_task["code"].strip()
+        ),
+        "original_tests_passed": original_ok,
+        "candidate_tests_passed": candidate_ok,
+        "candidate_validation_reason": candidate_reason,
+        "predicted_energy_kwh": optimization.get(
+            "predicted_energy_kwh"
+        ),
+    }
 
+    artifact_path = Path(
+        f"data/processed/optimization_code_task_{args.task_id}.json"
+    )
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text(
+        json.dumps(code_artifact, indent=2),
+        encoding="utf-8",
+    )
+    print(f"Code comparison saved to: {artifact_path}")
     if candidate_code.strip() == original_task["code"].strip():
         print(
             "No different optimized candidate was accepted. "

@@ -1,3 +1,5 @@
+
+import json
 import os
 
 import joblib
@@ -24,11 +26,14 @@ MODEL_CANDIDATE = "models/greenmetric_rf_final.joblib"
 MODEL_TRAINED = "models/greenmetric_model.joblib"
 DATA = "data/processed/mbpp_100_final_5sec.csv"
 OPTIMIZATION_DATA = "data/processed/optimization_comparison.csv"
+DEMO_OPTIMIZATION_DATA = (
+    "data/processed/optimization_comparison_ui_demo.csv"
+)
 
 
 @st.cache_resource
 def load_candidate_model(path):
-    """Load the saved single-model artifact used by the final RF training script."""
+    """Load the saved Random Forest artifact."""
     bundle = joblib.load(path)
     if not isinstance(bundle, dict):
         raise ValueError("Expected a model artifact dictionary.")
@@ -40,7 +45,7 @@ def load_candidate_model(path):
 
 @st.cache_resource
 def load_trained_model(path):
-    """Load the separate GreenMetricModel artifact, if present."""
+    """Load the separate GreenMetricModel artifact."""
     from greenmetricai.model import GreenMetricModel
     return GreenMetricModel.load(path)
 
@@ -51,8 +56,7 @@ def format_energy(value):
     return f"{value:.4g} kWh"
 
 
-# Prefer the existing GreenMetricModel artifact if present; otherwise load
-# the final Random Forest artifact with its own schema.
+# Load the available prediction model.
 model = None
 model_kind = None
 model_error = None
@@ -116,6 +120,7 @@ with analyze_tab:
                         name for name in feature_names
                         if name not in feature_values
                     ]
+
                     if missing_features:
                         st.error(
                             "The feature extractor did not produce: "
@@ -126,14 +131,19 @@ with analyze_tab:
                             [[feature_values[name] for name in feature_names]],
                             columns=feature_names,
                         )
-                        predicted_value = float(model["model"].predict(X)[0])
+                        predicted_value = float(
+                            model["model"].predict(X)[0]
+                        )
                         target = str(model["target"])
 
                         if target == "log10_energy_kwh_per_execution":
-                            # Guard against overflow from an invalid/extreme prediction.
-                            if not np.isfinite(predicted_value) or not -300 <= predicted_value <= 100:
+                            if (
+                                not np.isfinite(predicted_value)
+                                or not -300 <= predicted_value <= 100
+                            ):
                                 st.error(
-                                    "The model returned an invalid log-energy prediction."
+                                    "The model returned an invalid "
+                                    "log-energy prediction."
                                 )
                             else:
                                 predicted_energy = 10.0 ** predicted_value
@@ -142,8 +152,9 @@ with analyze_tab:
                                     format_energy(predicted_energy),
                                 )
                                 st.caption(
-                                    "Prediction from the saved Random Forest model. "
-                                    "This is an estimate, not a direct measurement."
+                                    "Prediction from the saved Random Forest "
+                                    "model. This is an estimate, not a "
+                                    "direct measurement."
                                 )
                         else:
                             st.error(
@@ -154,14 +165,23 @@ with analyze_tab:
                 elif model_kind == "greenmetric":
                     predicted_energy = float(model.predict(metrics))
                     energy_values = getattr(model, "energy_values", None)
+
                     if energy_values is not None:
                         from greenmetricai.scoring import SustainabilityScorer
-                        scores = SustainabilityScorer(energy_values).score(
-                            predicted_energy
-                        )
+
+                        scores = SustainabilityScorer(
+                            energy_values
+                        ).score(predicted_energy)
+
                         a, b, c, d = st.columns(4)
-                        a.metric("Predicted energy", format_energy(predicted_energy))
-                        b.metric("Impact index", f"{scores['impact_index']:.1f}/100")
+                        a.metric(
+                            "Predicted energy",
+                            format_energy(predicted_energy),
+                        )
+                        b.metric(
+                            "Impact index",
+                            f"{scores['impact_index']:.1f}/100",
+                        )
                         c.metric(
                             "Sustainability",
                             f"{scores['sustainability_score']:.1f}/100",
@@ -202,9 +222,8 @@ with shap_tab:
 
     if model is None:
         st.info("SHAP is unavailable until a compatible model is loaded.")
+
     elif model_kind == "random_forest":
-        # This artifact contains a single sklearn RandomForestRegressor.
-        # Explain its feature contributions directly; no GreenMetricModel wrapper needed.
         try:
             import shap
 
@@ -230,8 +249,9 @@ with shap_tab:
                 )
                 st.plotly_chart(fig, use_container_width=True)
                 st.caption(
-                    "This chart shows built-in Random Forest feature importance, "
-                    "not SHAP values. SHAP values require compatible input data."
+                    "This chart shows built-in Random Forest feature "
+                    "importance, not SHAP values. SHAP values require "
+                    "compatible input data."
                 )
 
                 if os.path.exists(DATA):
@@ -240,32 +260,39 @@ with shap_tab:
                         name for name in feature_names
                         if name not in measured_df.columns
                     ]
+
                     if missing:
                         st.warning(
-                            "The measured dataset does not contain all model "
-                            "features required for SHAP: "
+                            "The measured dataset does not contain all "
+                            "model features required for SHAP: "
                             + ", ".join(missing)
                         )
                     else:
                         X = measured_df[feature_names].apply(
                             pd.to_numeric, errors="coerce"
                         ).dropna()
+
                         if X.empty:
                             st.warning(
-                                "No complete numeric rows are available for SHAP."
+                                "No complete numeric rows are available "
+                                "for SHAP."
                             )
                         else:
                             sample = X.head(200)
                             explainer = shap.TreeExplainer(rf_model)
                             shap_values = explainer.shap_values(sample)
                             values = np.asarray(shap_values)
+
                             if values.ndim == 3:
                                 values = values[0]
+
                             mean_abs = np.abs(values).mean(axis=0)
                             shap_importance = pd.DataFrame({
                                 "feature": feature_names,
                                 "mean_abs_shap": mean_abs,
-                            }).sort_values("mean_abs_shap", ascending=False)
+                            }).sort_values(
+                                "mean_abs_shap", ascending=False
+                            )
 
                             st.subheader("SHAP Importance")
                             shap_fig = px.bar(
@@ -277,11 +304,15 @@ with shap_tab:
                                 orientation="h",
                                 title="Mean Absolute SHAP Values",
                                 labels={
-                                    "mean_abs_shap": "Mean absolute SHAP value",
+                                    "mean_abs_shap": (
+                                        "Mean absolute SHAP value"
+                                    ),
                                     "feature": "Feature",
                                 },
                             )
-                            st.plotly_chart(shap_fig, use_container_width=True)
+                            st.plotly_chart(
+                                shap_fig, use_container_width=True
+                            )
                             st.dataframe(
                                 shap_importance,
                                 use_container_width=True,
@@ -298,6 +329,7 @@ with shap_tab:
                     "The loaded model does not expose Random Forest "
                     "feature_importances_."
                 )
+
         except ImportError:
             st.warning(
                 "The `shap` package is not installed. Install it in the "
@@ -332,6 +364,7 @@ with shap_tab:
                 )
                 st.plotly_chart(fig, use_container_width=True)
                 st.dataframe(importance, use_container_width=True)
+
             except Exception as exc:
                 st.error(f"SHAP analysis failed: {exc}")
 
@@ -346,15 +379,32 @@ with energy_tab:
         "original and optimized MBPP task implementations."
     )
 
-    if not os.path.exists(OPTIMIZATION_DATA):
+    # Build the list of available benchmark datasets.
+    data_sources = {}
+
+    if os.path.exists(OPTIMIZATION_DATA):
+        data_sources["Historical benchmark results"] = OPTIMIZATION_DATA
+
+    if os.path.exists(DEMO_OPTIMIZATION_DATA):
+        data_sources["Latest demo benchmark"] = DEMO_OPTIMIZATION_DATA
+
+    if not data_sources:
         st.info(
             "No optimization results are available yet. Run "
             "`python -m scripts.compare_optimization --task-id 2` "
             "to generate the local comparison CSV."
         )
     else:
+        selected_source = st.radio(
+            "Benchmark dataset",
+            options=list(data_sources.keys()),
+            horizontal=True,
+        )
+        selected_path = data_sources[selected_source]
+        st.caption(f"Loaded measurements from: {selected_path}")
+
         try:
-            results = pd.read_csv(OPTIMIZATION_DATA)
+            results = pd.read_csv(selected_path)
 
             required = {
                 "task_id",
@@ -406,7 +456,9 @@ with energy_tab:
                 )
 
                 if not valid_tasks:
-                    st.warning("No valid task IDs were found in the results file.")
+                    st.warning(
+                        "No valid task IDs were found in the results file."
+                    )
                 else:
                     selected_task = st.selectbox(
                         "MBPP task ID",
@@ -414,11 +466,81 @@ with energy_tab:
                         format_func=lambda x: str(int(x)),
                     )
 
+                    # Show the saved original and accepted candidate code.
+                    artifact_path = (
+                        f"data/processed/optimization_code_task_"
+                        f"{int(selected_task)}.json"
+                    )
+
+                    st.subheader("Original vs Optimized Code")
+
+                    if os.path.exists(artifact_path):
+                        with open(
+                            artifact_path, "r", encoding="utf-8"
+                        ) as artifact_file:
+                            code_artifact = json.load(artifact_file)
+
+                        if code_artifact.get("candidate_different"):
+                            st.success(
+                                "The accepted candidate differs from "
+                                "the original implementation."
+                            )
+                        else:
+                            st.warning(
+                                "The accepted candidate is unchanged. "
+                                "This is not a successful code optimization."
+                            )
+
+                        st.write(
+                            "Original MBPP validation: "
+                            + (
+                                "Passed"
+                                if code_artifact.get("original_tests_passed")
+                                else "Failed"
+                            )
+                        )
+                        st.write(
+                            "Optimized candidate validation: "
+                            + (
+                                "Passed"
+                                if code_artifact.get("candidate_tests_passed")
+                                else "Failed"
+                            )
+                        )
+
+                        original_col, optimized_col = st.columns(2)
+
+                        with original_col:
+                            st.markdown("**Original Python code**")
+                            st.code(
+                                code_artifact["original_code"],
+                                language="python",
+                            )
+
+                        with optimized_col:
+                            st.markdown("**Optimized Python code**")
+                            st.code(
+                                code_artifact["optimized_code"],
+                                language="python",
+                            )
+
+                        st.caption(
+                            "Code is loaded from the saved benchmark artifact. "
+                            "It is not regenerated when the dashboard opens."
+                        )
+                    else:
+                        st.info(
+                            "No saved code artifact exists for this task yet. "
+                            "Run the benchmark to save the original and "
+                            "accepted optimized code."
+                        )
+
                     filtered = results[
                         results["task_id"] == selected_task
                     ].copy()
 
                     versions_present = set(filtered["version"])
+
                     if not {"original", "optimized"}.issubset(
                         versions_present
                     ):
@@ -450,10 +572,18 @@ with energy_tab:
                             .reindex(["original", "optimized"])
                         )
 
-                        original_energy = summary.loc["original", "mean_energy"]
-                        optimized_energy = summary.loc["optimized", "mean_energy"]
-                        original_runtime = summary.loc["original", "mean_runtime"]
-                        optimized_runtime = summary.loc["optimized", "mean_runtime"]
+                        original_energy = summary.loc[
+                            "original", "mean_energy"
+                        ]
+                        optimized_energy = summary.loc[
+                            "optimized", "mean_energy"
+                        ]
+                        original_runtime = summary.loc[
+                            "original", "mean_runtime"
+                        ]
+                        optimized_runtime = summary.loc[
+                            "optimized", "mean_runtime"
+                        ]
 
                         energy_change = None
                         if (
@@ -506,8 +636,9 @@ with energy_tab:
                                 "Runtime reduction",
                                 f"{runtime_change:.2f}%",
                                 help=(
-                                    "Positive means faster optimized execution; "
-                                    "negative means slower execution."
+                                    "Positive means faster optimized "
+                                    "execution; negative means slower "
+                                    "execution."
                                 ),
                             )
 
@@ -528,15 +659,20 @@ with energy_tab:
                             title="Original vs Optimized Energy",
                             labels={
                                 "version": "Code version",
-                                "mean_energy": "Mean energy (kWh/execution)",
+                                "mean_energy": (
+                                    "Mean energy (kWh/execution)"
+                                ),
                             },
                         )
-                        st.plotly_chart(fig_energy, use_container_width=True)
+                        st.plotly_chart(
+                            fig_energy, use_container_width=True
+                        )
 
                         st.subheader("Runtime per Measurement Run")
                         runtime_data = filtered.dropna(
                             subset=["runtime_sec_per_execution"]
                         ).sort_values(["run", "version"])
+
                         fig_runtime = px.line(
                             runtime_data,
                             x="run",
@@ -546,12 +682,15 @@ with energy_tab:
                             title="Runtime Across Repeated Runs",
                             labels={
                                 "run": "Run number",
-                                "runtime_sec_per_execution":
-                                    "Runtime (seconds/execution)",
+                                "runtime_sec_per_execution": (
+                                    "Runtime (seconds/execution)"
+                                ),
                                 "version": "Code version",
                             },
                         )
-                        st.plotly_chart(fig_runtime, use_container_width=True)
+                        st.plotly_chart(
+                            fig_runtime, use_container_width=True
+                        )
 
                         st.subheader("Mean Carbon Emissions")
                         carbon_chart = summary.reset_index()[
@@ -565,10 +704,14 @@ with energy_tab:
                             title="Estimated Carbon Emissions per Execution",
                             labels={
                                 "version": "Code version",
-                                "mean_carbon": "Mean carbon (g/execution)",
+                                "mean_carbon": (
+                                    "Mean carbon (g/execution)"
+                                ),
                             },
                         )
-                        st.plotly_chart(fig_carbon, use_container_width=True)
+                        st.plotly_chart(
+                            fig_carbon, use_container_width=True
+                        )
 
                         st.subheader("Correctness and Candidate Status")
                         status_columns = [
@@ -579,6 +722,7 @@ with energy_tab:
                             ]
                             if col in filtered.columns
                         ]
+
                         if status_columns:
                             status = filtered[
                                 ["task_id", "version", "run"] + status_columns
@@ -618,6 +762,7 @@ with energy_tab:
                             ]
                             if col in filtered.columns
                         ]
+
                         st.dataframe(
                             filtered[display_columns].sort_values(
                                 ["run", "version"]
@@ -630,9 +775,9 @@ with energy_tab:
                             "Interpretation: these results describe the "
                             "selected MBPP task and recorded machine. "
                             "They do not establish that optimization will "
-                            "reduce energy for all programs. Compare repeated "
-                            "runs and investigate measurement variability "
-                            "before drawing broader conclusions."
+                            "reduce energy for all programs. Compare "
+                            "repeated runs and investigate measurement "
+                            "variability before drawing broader conclusions."
                         )
 
         except Exception as exc:

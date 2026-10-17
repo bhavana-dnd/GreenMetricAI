@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import os
@@ -14,15 +15,12 @@ import pandas as pd
 from .features import extract_code_metrics
 from .mbpp import build_benchmark_code
 
-
 MODEL_PATH = "models/greenmetric_rf_final.joblib"
 GEMINI_MODEL = "gemini-3.6-flash"
 
 
 class GeminiProvider:
-    """
-    Gemini API provider used to generate candidate Python optimizations.
-    """
+    """Generate optimization candidates using the Gemini API."""
 
     def __init__(self, model=None, max_retries=3, retry_delay=5):
         from google import genai
@@ -37,7 +35,7 @@ class GeminiProvider:
         self.retry_delay = retry_delay
 
     def generate(self, prompt):
-        """Send a prompt to Gemini, retrying temporary 429/503 errors."""
+        """Retry temporary Gemini API errors, then raise the final error."""
         last_error = None
 
         for attempt in range(1, self.max_retries + 1):
@@ -54,13 +52,16 @@ class GeminiProvider:
 
             except Exception as exc:
                 last_error = exc
-                error_text = str(exc)
+                error_text = str(exc).upper()
 
-                temporary_error = (
-                    "503" in error_text
-                    or "429" in error_text
-                    or "UNAVAILABLE" in error_text
-                    or "RESOURCE_EXHAUSTED" in error_text
+                temporary_error = any(
+                    marker in error_text
+                    for marker in (
+                        "503",
+                        "429",
+                        "UNAVAILABLE",
+                        "RESOURCE_EXHAUSTED",
+                    )
                 )
 
                 if not temporary_error or attempt >= self.max_retries:
@@ -78,12 +79,7 @@ class GeminiProvider:
 
 
 class GreenMetricEnergyModel:
-    """
-    Loads the GreenMetricAI Random Forest model.
-
-    The model predicts log10 energy in kWh per execution;
-    predict() converts that prediction back into kWh.
-    """
+    """Load the trained model and predict energy in kWh per execution."""
 
     def __init__(self, path=MODEL_PATH):
         path = Path(path)
@@ -100,7 +96,7 @@ class GreenMetricEnergyModel:
         )
 
     def predict_log10(self, metrics):
-        """Return predicted log10 energy."""
+        """Predict log10 energy from code metrics."""
         values = metrics.to_dict() if hasattr(metrics, "to_dict") else dict(metrics)
 
         row = pd.DataFrame(
@@ -108,17 +104,15 @@ class GreenMetricEnergyModel:
             columns=self.features,
         )
 
-        prediction = self.model.predict(row)[0]
-        return float(prediction)
+        return float(self.model.predict(row)[0])
 
     def predict(self, metrics):
-        """Return predicted energy in kWh per execution."""
-        log_energy = self.predict_log10(metrics)
-        return float(10 ** log_energy)
+        """Convert the log10 energy prediction to kWh."""
+        return float(10 ** self.predict_log10(metrics))
 
 
 def extract_code(text):
-    """Extract Python source from a Gemini response."""
+    """Extract Python source from fenced or plain-text model output."""
     if not text:
         raise ValueError("Empty Gemini response.")
 
@@ -128,14 +122,11 @@ def extract_code(text):
         re.IGNORECASE | re.DOTALL,
     )
 
-    if match:
-        return match.group(1).strip()
-
-    return text.strip()
+    return match.group(1).strip() if match else text.strip()
 
 
 def validate_python_syntax(code):
-    """Check whether generated code is valid Python."""
+    """Return (True, None) for valid Python, otherwise (False, reason)."""
     try:
         compile(code, "<greenmetricai_candidate>", "exec")
         return True, None
@@ -146,12 +137,7 @@ def validate_python_syntax(code):
 
 
 def validate_mbpp_candidate(task, candidate, timeout_seconds=30):
-    """
-    Validate a candidate against the task's MBPP tests.
-
-    Returns (True, None) when validation succeeds,
-    otherwise (False, reason).
-    """
+    """Run the MBPP tests for a candidate in a separate Python process."""
     syntax_ok, syntax_error = validate_python_syntax(candidate)
     if not syntax_ok:
         return False, syntax_error
@@ -198,16 +184,11 @@ def optimize_mbpp_task(
     validation_timeout=30,
 ):
     """
-    Optimize one MBPP task.
+    Optimize an MBPP task.
 
-    A candidate is accepted only when:
-    1. Its syntax is valid.
-    2. It passes MBPP tests.
-    3. Its predicted energy is lower.
-    4. Relative predicted improvement meets min_improvement.
-
-    Predicted improvement is not a measured energy saving.
-    Actual energy measurement must be performed separately.
+    A candidate is accepted only if it passes MBPP tests and meets the
+    minimum predicted energy improvement. Predictions are not measured
+    energy savings.
     """
     original_code = task["code"]
     current_code = original_code
@@ -217,37 +198,22 @@ def optimize_mbpp_task(
 
     for round_number in range(1, rounds + 1):
         prompt = (
-            "You are optimizing Python code for the GreenMetricAI research project.\n\n"
-            "OBJECTIVE:\n"
-            "Reduce predicted execution energy while preserving EXACT behavior.\n\n"
-            "STRICT REQUIREMENTS:\n"
-            "1. Preserve all required function names.\n"
-            "2. Preserve all function arguments.\n"
-            "3. Preserve return values.\n"
-            "4. Preserve externally observable behavior.\n"
-            "5. Do not remove required functionality.\n"
-            "6. Do not add external dependencies.\n"
-            "7. Do not change input/output format.\n"
-            "8. Do not modify the test cases.\n"
-            "9. Return ONLY complete Python source code.\n"
-            "10. Do not explain the changes.\n\n"
-            "CURRENT PYTHON CODE:\n"
-            "```python\n"
+            "You are optimizing Python code for GreenMetricAI.\n\n"
+            "Reduce predicted execution energy while preserving exact behavior.\n"
+            "Preserve function names, arguments, return values, and observable "
+            "behavior. Do not add dependencies or change input/output formats.\n"
+            "Return only the complete Python source code, without explanation.\n\n"
+            "CURRENT PYTHON CODE:\n```python\n"
             + current_code
-            + "\n```\n\n"
-            "CURRENT STATIC CODE METRICS:\n"
+            + "\n```\n\nCURRENT STATIC CODE METRICS:\n"
             + str(current_metrics.to_dict())
-            + "\n\n"
-            "CURRENT PREDICTED ENERGY:\n"
+            + "\n\nCURRENT PREDICTED ENERGY:\n"
             + f"{current_energy:.12g}"
-            + " kWh per execution.\n\n"
-            "Generate one behavior-preserving optimization."
+            + " kWh per execution.\n\nGenerate one behavior-preserving optimization."
         )
 
         print(f"\nOptimization round {round_number}/{rounds}")
 
-        # Gemini API failures stop the loop. The provider itself retries
-        # temporary API errors according to its configured retry policy.
         try:
             response = provider.generate(prompt)
             candidate = extract_code(response)
@@ -259,9 +225,10 @@ def optimize_mbpp_task(
                     "reason": f"llm_error: {exc}",
                 }
             )
+            # The provider has already performed its configured API retries.
+            # Stop if candidate generation still fails.
             break
 
-        # Syntax validation: reject and continue to the next round.
         syntax_ok, syntax_error = validate_python_syntax(candidate)
         if not syntax_ok:
             history.append(
@@ -274,7 +241,6 @@ def optimize_mbpp_task(
             )
             continue
 
-        # Extract candidate features and predict energy.
         try:
             candidate_metrics = extract_code_metrics(candidate)
             candidate_energy = model.predict(candidate_metrics)
@@ -309,8 +275,7 @@ def optimize_mbpp_task(
         elif improvement < min_improvement:
             rejection_reason = (
                 f"below_energy_threshold: predicted improvement "
-                f"{improvement:.4%} is below required "
-                f"{min_improvement:.4%}."
+                f"{improvement:.4%} is below required {min_improvement:.4%}."
             )
         else:
             rejection_reason = None
@@ -329,10 +294,7 @@ def optimize_mbpp_task(
         )
 
         print(f"Tests passed: {tests_passed}")
-        print(
-            "Predicted candidate energy: "
-            f"{candidate_energy:.12g} kWh/execution"
-        )
+        print(f"Predicted candidate energy: {candidate_energy:.12g} kWh/execution")
         print(f"Predicted improvement: {improvement * 100:.4f}%")
         print(f"Accepted: {accepted}")
 
@@ -341,7 +303,8 @@ def optimize_mbpp_task(
             current_metrics = candidate_metrics
             current_energy = candidate_energy
 
-        # If rejected, continue to the next bounded round.
+        # Rejected candidates do not replace the current accepted version.
+        # The next round can try another candidate.
 
     return {
         "original_code": original_code,

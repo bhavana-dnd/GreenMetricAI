@@ -1,4 +1,4 @@
-# GreenMetricAI — Real-Data Editio
+# GreenMetricAI — Real-Data Edition
 
 The experimental dataset is built from the real **MBPP (Mostly Basic Python Problems)** benchmark. MBPP contains roughly 1,000 crowd-sourced Python programming problems, each with a reference implementation and automated tests. The Google Research repository also provides a sanitized subset. See:
 https://github.com/google-research/google-research/tree/master/mbpp

@@ -1,0 +1,82 @@
+name: GreenMetricAI PR review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Tests and evidence report
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Check out the PR merge commit
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
+
+      - name: Install test dependencies
+        run: python -m pip install -r requirements-ci.txt
+
+      - name: Run project tests
+        id: tests
+        continue-on-error: true
+        run: |
+          mkdir -p reports
+          python -m pytest -q --junitxml=reports/ci-junit.xml
+
+      - name: Build validation and benchmark report
+        if: always()
+        run: python scripts/ci_review_report.py
+
+      - name: Upload review report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: greenmetricai-review-${{ github.event.pull_request.number || github.run_number }}
+          path: reports/ci-pr-report.md
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Comment on same-repository pull requests
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('reports/ci-pr-report.md', 'utf8');
+            const marker = '<!-- greenmetricai-review -->';
+            const content = `${marker}\n${body}`;
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100
+            });
+            const existing = comments.find(comment =>
+              comment.user?.type === 'Bot' && comment.body?.includes(marker)
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: existing.id, body: content
+              });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body: content });
+            }
+
+      - name: Fail if project tests failed
+        if: steps.tests.outcome == 'failure'
+        run: exit 1

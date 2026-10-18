@@ -1,0 +1,5 @@
+# Minimal dependencies needed to run the project unit tests in GitHub Actions.
+joblib>=1.4
+pandas>=2.2
+pytest>=8.0
+radon>=6.0

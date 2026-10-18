@@ -66,7 +66,7 @@ def format_energy(value):
     return f"{value:.4g} kWh"
 
 
-def render_local_shap(title, explanation):
+def render_local_shap(title, explanation, chart_key):
     """Render local SHAP contributions without implying measured effects."""
     st.markdown(f"**{title}**")
     if not explanation or not explanation.get("available"):
@@ -93,7 +93,7 @@ def render_local_shap(title, explanation):
         },
         title="Largest local feature contributions",
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key=chart_key)
     st.caption(
         "Positive SHAP values raise the model's predicted energy; negative "
         "values lower it. These explain the model prediction, not measured "
@@ -1118,6 +1118,7 @@ with response_tab:
         render_local_shap(
             "Why did the model give the original code this score?",
             result.get("original_explanation"),
+            chart_key="response_optimizer_original_shap",
         )
 
         ranked_number = result.get("recommended_number")
@@ -1166,6 +1167,7 @@ with response_tab:
                     render_local_shap(
                         f"Why did the model score alternative {number} this way?",
                         candidate.get("explanation"),
+                        chart_key=f"response_optimizer_candidate_{number}_shap",
                     )
                     st.download_button(
                         "Download this alternative",

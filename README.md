@@ -126,6 +126,22 @@ The current workflow reports predictions, not measured savings, and does not
 estimate the LLM call's energy or water use. Only execute code you trust; the
 check runner uses a timeout but is not a security sandbox.
 
+## Pull request checks
+
+GitHub Actions runs the project test suite for pull requests and pushes to
+`main`. Each run publishes a Markdown report with the test result and the
+checked-in paired MBPP energy evidence, including its confidence interval.
+That experiment is labeled as historical evidence; CI does not claim to
+measure the PR's energy on a shared hosted runner. A candidate is eligible for
+human review only when its recorded checks pass and its measured confidence
+interval clears the configured minimum reduction. No code is applied
+automatically. The test job receives no API keys; comments are posted only for
+same-repository pull requests. Fork pull requests can read the report in the
+Actions run summary and artifact.
+
+The workflow uses `requirements-ci.txt`, a minimal dependency set for running
+the unit tests. It does not require Gemini credentials or benchmark downloads.
+
 ## Important measurement design
 
 Very short functions can consume too little energy for stable measurement. The collector therefore repeats the **real benchmark tests** many times inside the measurement window. The source code and test cases remain real; only the number of repetitions is an experimental measurement parameter.

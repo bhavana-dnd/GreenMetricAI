@@ -281,13 +281,23 @@ def _run_tracked_benchmark(
 def execute_python_code(
     code,
     timeout_seconds=120,
-    country_iso="IND"
+    country_iso="IND",
+    working_directory=None,
 ):
     """
     Launch a separate Python process.
 
     CodeCarbon is started inside that process.
     """
+
+    if working_directory is None:
+        project_directory = Path.cwd()
+    else:
+        project_directory = Path(working_directory).expanduser().resolve()
+        if not project_directory.is_dir():
+            raise ValueError(
+                f"Working directory does not exist: {project_directory}"
+            )
 
     with tempfile.TemporaryDirectory(
         prefix="greenmetricai_"
@@ -315,6 +325,11 @@ def execute_python_code(
         runner_code = f'''
 import sys
 from pathlib import Path
+
+sys.path.insert(
+    0,
+    {str(project_directory)!r}
+)
 
 sys.path.insert(
     0,
@@ -352,7 +367,8 @@ _run_tracked_benchmark(
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            text=True,
+            cwd=str(project_directory),
         )
 
         try:

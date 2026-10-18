@@ -66,6 +66,49 @@ def format_energy(value):
     return f"{value:.4g} kWh"
 
 
+def render_code_metrics(code, key_prefix):
+    """Show Radon outputs separately from GreenMetricAI AST features."""
+    try:
+        values = extract_code_metrics(code).to_dict()
+    except Exception as exc:
+        st.warning(f"Static code metrics could not be calculated: {exc}")
+        return
+
+    st.markdown("**Radon static analysis**")
+    cc, mi, hv, loc = st.columns(4)
+    cc.metric(
+        "Cyclomatic complexity",
+        f"{values['cc']:.2f}",
+        help="Radon complexity score; lower often means simpler control flow.",
+    )
+    mi.metric(
+        "Maintainability index",
+        f"{values['mi']:.2f}",
+        help=(
+            "Radon maintainability index from 0 to 100; higher is generally "
+            "easier to maintain."
+        ),
+    )
+    hv.metric(
+        "Halstead volume",
+        f"{values['hv']:.2f}",
+        help="Radon Halstead volume; a static estimate of implementation size/effort.",
+    )
+    loc.metric("Source lines of code", str(values['loc']))
+
+    extra = {
+        name: value
+        for name, value in values.items()
+        if name not in {"cc", "mi", "hv", "loc"}
+    }
+    with st.expander("GreenMetricAI-derived code features"):
+        st.dataframe(
+            pd.DataFrame.from_dict(extra, orient="index", columns=["Value"]),
+            use_container_width=True,
+            key=f"{key_prefix}_derived_features",
+        )
+
+
 def render_local_shap(title, explanation, chart_key):
     """Render local SHAP contributions without implying measured effects."""
     st.markdown(f"**{title}**")
@@ -139,8 +182,14 @@ if model is None:
     if model_error:
         st.caption(f"Model loading detail: {model_error}")
 
-analyze_tab, shap_tab, energy_tab, response_tab = st.tabs(
-    ["Analyze", "SHAP", "Energy Validation", "Optimize LLM code"]
+analyze_tab, shap_tab, energy_tab, project_benchmark_tab, response_tab = st.tabs(
+    [
+        "Analyze",
+        "SHAP",
+        "Energy Validation",
+        "Project Benchmark",
+        "Optimize LLM code",
+    ]
 )
 
 # ---------------------------------------------------------
@@ -168,6 +217,8 @@ with analyze_tab:
             try:
                 metrics = extract_code_metrics(code)
                 feature_values = metrics.to_dict()
+
+                render_code_metrics(code, "analyze")
 
                 if model_kind == "random_forest":
                     feature_names = list(model["features"])
@@ -247,14 +298,6 @@ with analyze_tab:
                             "Predicted energy",
                             format_energy(predicted_energy),
                         )
-
-                st.subheader("Static Features")
-                st.dataframe(
-                    pd.DataFrame([feature_values]).T.rename(
-                        columns={0: "value"}
-                    ),
-                    use_container_width=True,
-                )
 
                 if model_kind == "greenmetric":
                     st.subheader("Model Validation Metrics")
@@ -432,6 +475,11 @@ with energy_tab:
     st.write(
         "Compare repeated energy and runtime measurements for "
         "original and optimized MBPP task implementations."
+    )
+    st.info(
+        "CodeCarbon-tracked energy and CO₂e below come from the saved repeated "
+        "benchmark runs. The Optimize LLM code tab currently reports model "
+        "predictions; it does not measure candidates with CodeCarbon."
     )
 
     # Build the list of available benchmark datasets.
@@ -738,11 +786,11 @@ with energy_tab:
 
                         a, b, c, d = st.columns(4)
                         a.metric(
-                            "Original mean energy",
+                            "Original CodeCarbon energy / execution",
                             format_energy(original_energy),
                         )
                         b.metric(
-                            "Optimized mean energy",
+                            "Optimized CodeCarbon energy / execution",
                             format_energy(optimized_energy),
                         )
 
@@ -770,6 +818,52 @@ with energy_tab:
                                     "execution."
                                 ),
                             )
+
+                        a, b, c = st.columns(3)
+                        original_carbon = summary.loc[
+                            "original", "mean_carbon"
+                        ]
+                        optimized_carbon = summary.loc[
+                            "optimized", "mean_carbon"
+                        ]
+                        a.metric(
+                            "Original estimated CO₂e / execution",
+                            (
+                                f"{original_carbon:.6g} g"
+                                if pd.notna(original_carbon)
+                                else "N/A"
+                            ),
+                        )
+                        b.metric(
+                            "Optimized estimated CO₂e / execution",
+                            (
+                                f"{optimized_carbon:.6g} g"
+                                if pd.notna(optimized_carbon)
+                                else "N/A"
+                            ),
+                        )
+                        carbon_change = None
+                        if (
+                            pd.notna(original_carbon)
+                            and original_carbon > 0
+                            and pd.notna(optimized_carbon)
+                        ):
+                            carbon_change = (
+                                (original_carbon - optimized_carbon)
+                                / original_carbon
+                            ) * 100
+                        c.metric(
+                            "Estimated CO₂e reduction",
+                            (
+                                f"{carbon_change:.2f}%"
+                                if carbon_change is not None
+                                else "N/A"
+                            ),
+                            help=(
+                                "Calculated from the mean CO₂e values recorded "
+                                "in the selected benchmark CSV."
+                            ),
+                        )
 
                         st.caption(
                             f"Task {int(selected_task)} · "
@@ -869,6 +963,12 @@ with energy_tab:
                             hide_index=True,
                         )
 
+                        st.caption(
+                            "CodeCarbon values are per-execution outputs recorded "
+                            "for each benchmark run. The individual table below "
+                            "includes hardware and run metadata when present."
+                        )
+
                         st.subheader("Individual Measurements")
                         display_columns = [
                             col for col in [
@@ -911,6 +1011,291 @@ with energy_tab:
 
         except Exception as exc:
             st.error(f"Could not load optimization results: {exc}")
+
+
+# ---------------------------------------------------------
+# PROJECT BENCHMARK
+# ---------------------------------------------------------
+with project_benchmark_tab:
+    st.subheader("Measure your own Python project")
+    st.write(
+        "Paste an original and optimized version, add your own checks and "
+        "workload, and compare them using repeated CodeCarbon measurements "
+        "on this computer. GreenMetricAI runs the checks first."
+    )
+    st.warning(
+        "The pasted code, checks, and workload execute locally with your "
+        "user permissions. A timeout is not a security sandbox. Use trusted "
+        "code only. This feature currently supports Python code."
+    )
+
+    project_directory = st.text_input(
+        "Project directory (only needed for local imports or data files)",
+        value=os.getcwd(),
+        key="project_benchmark_directory",
+        help=(
+            "Standalone pasted code can use the default. If your code imports "
+            "local project modules or reads data, enter that project's folder. "
+            "Use absolute imports for local packages."
+        ),
+    ).strip()
+    project_path = Path(project_directory).expanduser()
+    directory_valid = project_path.is_dir()
+    if not directory_valid:
+        st.error("Enter an existing project directory on this computer.")
+
+    original_column, optimized_column = st.columns(2)
+    with original_column:
+        original_code = st.text_area(
+            "Original Python code",
+            height=280,
+            key="project_benchmark_original_code",
+            placeholder="Paste the original code here...",
+        )
+    with optimized_column:
+        optimized_code = st.text_area(
+            "Optimized Python code",
+            height=280,
+            key="project_benchmark_optimized_code",
+            placeholder="Paste the optimized version here...",
+        )
+
+    checks = st.text_area(
+        "Behavior checks (Python assertions)",
+        height=140,
+        key="project_benchmark_checks",
+        placeholder=(
+            "assert calculate([1, 2, 3]) == 6\n"
+            "assert calculate([]) == 0"
+        ),
+        help=(
+            "These assertions are run separately against both versions before "
+            "any measurements are collected."
+        ),
+    )
+    workload = st.text_area(
+        "Workload to measure (Python statements)",
+        height=110,
+        key="project_benchmark_workload",
+        placeholder="e.g. calculate(sample_data)",
+        help=(
+            "This is the operation CodeCarbon will measure. It is executed "
+            "once per iteration, after the file's definitions are loaded."
+        ),
+    )
+    country_iso = st.text_input(
+        "Country/region ISO-3 code for carbon intensity",
+        value="IND",
+        max_chars=3,
+        key="project_benchmark_country",
+        help="Examples: IND, USA, GBR, DEU. CodeCarbon uses this for grid carbon intensity.",
+    ).strip().upper()
+    if len(country_iso) != 3 or not country_iso.isalpha():
+        st.error("Enter a three-letter ISO country code.")
+    run_count, iteration_count = st.columns(2)
+    with run_count:
+        measurement_pairs = st.slider(
+            "Paired measurement runs",
+            min_value=2,
+            max_value=10,
+            value=3,
+            key="project_benchmark_pairs",
+            help="Both versions are measured this many times, alternating run order.",
+        )
+    with iteration_count:
+        workload_iterations = st.number_input(
+            "Workload iterations per run",
+            min_value=1,
+            max_value=10000,
+            value=10,
+            step=1,
+            key="project_benchmark_iterations",
+            help="Increase this for very short operations so each tracking window captures the workload.",
+        )
+    trusted_project = st.checkbox(
+        "I trust this code, checks, and workload to run on this computer.",
+        key="project_benchmark_trusted",
+    )
+
+    source_by_version = {
+        "original": original_code,
+        "optimized": optimized_code,
+    }
+    virtual_paths = {
+        "original": project_path.resolve() / "greenmetricai_original.py",
+        "optimized": project_path.resolve() / "greenmetricai_optimized.py",
+    }
+    code_valid = bool(original_code.strip() and optimized_code.strip())
+    benchmark_signature = (
+        original_code, optimized_code, str(project_path.resolve()), checks,
+        workload, int(workload_iterations), int(measurement_pairs), country_iso,
+    ) if directory_valid else None
+
+    can_run_project_benchmark = (
+        code_valid and directory_valid and bool(checks.strip()) and bool(workload.strip())
+        and trusted_project and len(country_iso) == 3 and country_iso.isalpha()
+    )
+    if st.button(
+        "Validate and measure both versions",
+        type="primary",
+        disabled=not can_run_project_benchmark,
+        key="project_benchmark_run",
+    ):
+        try:
+            st.session_state.pop("project_benchmark_result", None)
+            from greenmetricai.executor import execute_python_code, hardware_metadata
+            from greenmetricai.response_optimizer import validate_code_with_checks
+
+            checks_passed = True
+            for version, source in source_by_version.items():
+                passed, reason = validate_code_with_checks(
+                    source,
+                    checks,
+                    timeout_seconds=30,
+                    working_directory=str(project_path.resolve()),
+                    source_path=str(virtual_paths[version]),
+                )
+                if passed:
+                    st.success(f"{version.title()} version passed the supplied checks.")
+                else:
+                    checks_passed = False
+                    st.error(f"{version.title()} version failed checks: {reason}")
+
+            if checks_passed:
+                records = []
+                with st.spinner(
+                    f"Collecting {measurement_pairs * 2} CodeCarbon runs; "
+                    "this can take a few minutes..."
+                ):
+                    for pair_index in range(int(measurement_pairs)):
+                        order = (
+                            ["original", "optimized"]
+                            if pair_index % 2 == 0
+                            else ["optimized", "original"]
+                        )
+                        for version in order:
+                            source = source_by_version[version]
+                            source_path = virtual_paths[version]
+                            benchmark_code = (
+                                "import builtins\n"
+                                f"_source = {source!r}\n"
+                                f"_filename = {str(source_path)!r}\n"
+                                "_namespace = {\n"
+                                "    '__name__': 'greenmetricai_project_code',\n"
+                                "    '__file__': _filename,\n"
+                                "    '__builtins__': builtins,\n"
+                                "}\n"
+                                "exec(compile(_source, _filename, 'exec'), _namespace)\n"
+                                f"_workload = {workload!r}\n"
+                                f"for _iteration in range({int(workload_iterations)}):\n"
+                                "    exec(compile(_workload, '<greenmetricai workload>', 'exec'), _namespace)\n"
+                            )
+                            measurement = execute_python_code(
+                                benchmark_code,
+                                timeout_seconds=180,
+                                working_directory=str(project_path.resolve()),
+                                country_iso=country_iso,
+                            )
+                            records.append({
+                                "pair": pair_index + 1,
+                                "version": version,
+                                "runtime_sec": measurement.get("benchmark_runtime_sec"),
+                                "energy_kwh": measurement.get("energy_kwh"),
+                                "carbon_emissions_g": measurement.get("carbon_emissions_g"),
+                                "peak_memory_mb": measurement.get("memory_peak_mb"),
+                                "wall_clock_sec": measurement.get("wall_clock_sec"),
+                            })
+
+                results_frame = pd.DataFrame(records)
+                for column in [
+                    "runtime_sec", "energy_kwh", "carbon_emissions_g",
+                    "peak_memory_mb", "wall_clock_sec",
+                ]:
+                    results_frame[column] = pd.to_numeric(
+                        results_frame[column], errors="coerce"
+                    )
+                summary = results_frame.groupby("version").agg(
+                    runs=("pair", "count"),
+                    mean_runtime_sec=("runtime_sec", "mean"),
+                    mean_energy_kwh=("energy_kwh", "mean"),
+                    median_energy_kwh=("energy_kwh", "median"),
+                    mean_carbon_g=("carbon_emissions_g", "mean"),
+                    mean_peak_memory_mb=("peak_memory_mb", "mean"),
+                ).reindex(["original", "optimized"])
+
+                def reduction_percent(column):
+                    baseline = summary.loc["original", column]
+                    candidate = summary.loc["optimized", column]
+                    if pd.isna(baseline) or baseline <= 0 or pd.isna(candidate):
+                        return None
+                    return (baseline - candidate) / baseline * 100
+
+                st.session_state["project_benchmark_result"] = {
+                    "records": results_frame,
+                    "summary": summary,
+                    "energy_reduction_pct": reduction_percent("mean_energy_kwh"),
+                    "carbon_reduction_pct": reduction_percent("mean_carbon_g"),
+                    "hardware": hardware_metadata(),
+                    "files": list(virtual_paths.values()),
+                    "iterations": int(workload_iterations),
+                    "country_iso": country_iso,
+                    "signature": benchmark_signature,
+                }
+        except Exception as exc:
+            st.error(f"Project benchmark failed: {exc}")
+
+    project_result = st.session_state.get("project_benchmark_result")
+    if project_result and project_result.get("signature") == benchmark_signature:
+        st.subheader("Measured project comparison")
+        energy_reduction = project_result["energy_reduction_pct"]
+        carbon_reduction = project_result["carbon_reduction_pct"]
+        original_values = project_result["summary"].loc["original"]
+        optimized_values = project_result["summary"].loc["optimized"]
+        metric_columns = st.columns(4)
+        metric_columns[0].metric(
+            "Original mean CodeCarbon energy",
+            format_energy(original_values["mean_energy_kwh"]),
+        )
+        metric_columns[1].metric(
+            "Optimized mean CodeCarbon energy",
+            format_energy(optimized_values["mean_energy_kwh"]),
+        )
+        metric_columns[2].metric(
+            "Measured energy reduction",
+            f"{energy_reduction:.2f}%" if energy_reduction is not None else "N/A",
+        )
+        metric_columns[3].metric(
+            "Estimated CO₂e reduction",
+            f"{carbon_reduction:.2f}%" if carbon_reduction is not None else "N/A",
+        )
+        st.caption(
+            f"Each version ran the supplied workload "
+            f"{project_result['iterations']} times per measurement. "
+            "CodeCarbon energy and emissions are estimates for this machine "
+            "and workload; small differences may be measurement noise."
+        )
+        st.dataframe(
+            project_result["summary"].reset_index(),
+            use_container_width=True,
+            hide_index=True,
+            key="project_benchmark_summary_table",
+        )
+        st.subheader("Individual measurement runs")
+        st.dataframe(
+            project_result["records"],
+            use_container_width=True,
+            hide_index=True,
+            key="project_benchmark_runs_table",
+        )
+        st.caption("Machine details: " + json.dumps(project_result["hardware"]))
+        st.caption(f"Carbon-intensity location: {project_result['country_iso']}")
+        st.download_button(
+            "Download measurement CSV",
+            data=project_result["records"].to_csv(index=False),
+            file_name="greenmetricai_project_measurements.csv",
+            mime="text/csv",
+            key="project_benchmark_download",
+        )
 
 
 # ---------------------------------------------------------
@@ -1115,6 +1500,8 @@ with response_tab:
             "This is a model prediction, not a CodeCarbon measurement. "
             "Passing the supplied checks does not prove equivalence for all inputs."
         )
+        with st.expander("Radon metrics for original code"):
+            render_code_metrics(result["original_code"], "response_original")
         render_local_shap(
             "Why did the model give the original code this score?",
             result.get("original_explanation"),
@@ -1164,6 +1551,10 @@ with response_tab:
                             "energy is not lower than the original."
                         )
                     st.code(candidate["code"], language="python")
+                    with st.expander("Radon metrics for this alternative"):
+                        render_code_metrics(
+                            candidate["code"], f"response_candidate_{number}"
+                        )
                     render_local_shap(
                         f"Why did the model score alternative {number} this way?",
                         candidate.get("explanation"),

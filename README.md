@@ -122,7 +122,15 @@ log-energy prediction; they do not explain measured energy or establish causal
 effects. The separate SHAP tab provides global feature importance across the
 available measured examples.
 
-The current workflow reports predictions, not measured savings, and does not
+The **Project Benchmark** tab lets you paste original and optimized Python
+code, provide assertions and a workload, then compare repeated CodeCarbon
+measurements on the computer running Streamlit. Use its optional project
+directory when the code needs local imports or data files. These measurements
+are workload- and machine-specific; they do not depend on MBPP or the energy
+prediction model. The workload is executed once per configured iteration in
+each measurement run, after the pasted code's definitions have loaded.
+
+The optimizer reports predictions, not measured savings, and the app does not
 estimate the LLM call's energy or water use. Only execute code you trust; the
 check runner uses a timeout but is not a security sandbox.
 
@@ -178,6 +186,30 @@ This is evidence for the measured task and machine, not proof that every
 program will save energy. The interval assumes the paired log ratios are
 approximately independent and normally distributed; repeat the experiment in
 independent sessions and on other hardware before making broad claims.
+
+### Compare several candidates without picking a noisy winner
+
+The multiple-candidate validator checks candidate code against the official
+MBPP tests, then measures the baseline and every passing candidate in
+position-balanced blocks. It adjusts Student-t confidence intervals for both
+the number of candidates and all planned interim looks. It recommends a
+candidate only when its lower confidence bound clears the practical reduction
+threshold and separates from the upper bounds of the other passing candidates.
+This reduces false wins from selecting the best-looking result among several
+LLM alternatives; it does not prove savings on other workloads or hardware.
+
+After downloading the sanitized MBPP data, run the example with:
+
+```powershell
+python -m scripts.compare_candidate_set `
+  --task-id 2 `
+  --candidate-set examples/candidate_set_task_2.json
+```
+
+Candidate set files contain `task_id`, the exact official `original_code`,
+and one to ten `{ "candidate_id", "code" }` entries. Use only code you trust:
+the timeout-based behavior check is not a security sandbox. The measurement
+CSV and JSON summary use new files and refuse to overwrite existing results.
 
 ## Security
 

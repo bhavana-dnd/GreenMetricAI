@@ -20,6 +20,8 @@ def validate_code_with_checks(
     checks,
     timeout_seconds=10,
     working_directory=None,
+    module_package=None,
+    source_path=None,
 ):
     """Run user-provided checks in a timed child process.
 
@@ -38,6 +40,11 @@ def validate_code_with_checks(
     project_directory = project_directory.resolve()
 
     script_path = None
+    script_directory = (
+        Path(source_path).expanduser().resolve().parent
+        if source_path
+        else project_directory
+    )
     try:
         # Put the temporary candidate alongside the project so code that uses
         # Path(__file__).parent to locate project data resolves the same way it
@@ -47,10 +54,23 @@ def validate_code_with_checks(
             encoding="utf-8",
             prefix=".greenmetricai_checks_",
             suffix=".py",
-            dir=project_directory,
+            dir=script_directory,
             delete=False,
         ) as script_file:
-            script_file.write(code.rstrip() + "\n\n" + checks.rstrip() + "\n")
+            bootstrap = f"import sys\nsys.path.insert(0, {str(project_directory)!r})\n"
+            package_context = (
+                f"__package__ = {module_package!r}\n"
+                if module_package
+                else ""
+            )
+            script_file.write(
+                bootstrap
+                + package_context
+                + code.rstrip()
+                + "\n\n"
+                + checks.rstrip()
+                + "\n"
+            )
             script_path = Path(script_file.name)
 
         try:

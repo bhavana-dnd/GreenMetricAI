@@ -1,6 +1,7 @@
 
 import json
 import os
+from pathlib import Path
 
 import joblib
 import numpy as np
@@ -9,6 +10,15 @@ import plotly.express as px
 import streamlit as st
 
 from greenmetricai.features import extract_code_metrics
+
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    # The optimizer also accepts a key entered in the page if python-dotenv
+    # has not been installed yet.
+    pass
 
 st.set_page_config(
     page_title="GreenMetricAI",
@@ -19,7 +29,7 @@ st.set_page_config(
 st.title("🌱 GreenMetricAI")
 st.caption(
     "Measured MBPP execution data, energy prediction, "
-    "SHAP explainability, and optimization validation"
+    "SHAP explainability, and behavior-checked code alternatives"
 )
 
 MODEL_CANDIDATE = "models/greenmetric_rf_final.joblib"
@@ -56,6 +66,51 @@ def format_energy(value):
     return f"{value:.4g} kWh"
 
 
+def render_local_shap(title, explanation):
+    """Render local SHAP contributions without implying measured effects."""
+    st.markdown(f"**{title}**")
+    if not explanation or not explanation.get("available"):
+        reason = explanation.get("reason") if explanation else "No explanation was computed."
+        st.info(f"Local SHAP explanation unavailable: {reason}")
+        return
+
+    contributions = pd.DataFrame(explanation["features"])
+    top = contributions.head(10).sort_values("shap_value")
+    fig = px.bar(
+        top,
+        x="shap_value",
+        y="feature",
+        color="effect",
+        orientation="h",
+        color_discrete_map={
+            "Raises predicted energy": "#d95f59",
+            "Lowers predicted energy": "#20a779",
+        },
+        labels={
+            "shap_value": "SHAP contribution (log10 kWh/execution)",
+            "feature": "Code feature",
+            "effect": "Effect on prediction",
+        },
+        title="Largest local feature contributions",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption(
+        "Positive SHAP values raise the model's predicted energy; negative "
+        "values lower it. These explain the model prediction, not measured "
+        "energy or causal effects."
+    )
+    st.dataframe(
+        contributions,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "shap_value": st.column_config.NumberColumn(
+                "SHAP contribution (log10 kWh)", format="%.5f"
+            )
+        },
+    )
+
+
 # Load the available prediction model.
 model = None
 model_kind = None
@@ -84,8 +139,8 @@ if model is None:
     if model_error:
         st.caption(f"Model loading detail: {model_error}")
 
-analyze_tab, shap_tab, energy_tab = st.tabs(
-    ["Analyze", "SHAP", "Energy Validation"]
+analyze_tab, shap_tab, energy_tab, response_tab = st.tabs(
+    ["Analyze", "SHAP", "Energy Validation", "Optimize LLM code"]
 )
 
 # ---------------------------------------------------------
@@ -391,8 +446,10 @@ with energy_tab:
     if not data_sources:
         st.info(
             "No optimization results are available yet. Run "
-            "`python -m scripts.compare_optimization --task-id 2` "
-            "to generate the local comparison CSV."
+            "`python -m scripts.compare_optimization --task-id 2 "
+            "--reuse-saved-candidate` to measure the saved task-2 candidate "
+            "and create the local comparison CSV. This uses fresh local "
+            "measurements; it does not recreate another computer's history."
         )
     else:
         selected_source = st.radio(
@@ -528,6 +585,78 @@ with energy_tab:
                             "Code is loaded from the saved benchmark artifact. "
                             "It is not regenerated when the dashboard opens."
                         )
+
+                        measured_validation = code_artifact.get(
+                            "measured_validation"
+                        )
+                        if measured_validation:
+                            st.subheader("Noise-aware paired validation")
+                            evidence_status = measured_validation.get(
+                                "status", "unknown"
+                            )
+                            status_messages = {
+                                "confirmed_reduction": (
+                                    "Measured reduction cleared the minimum "
+                                    "effect threshold with the adjusted interval."
+                                ),
+                                "below_minimum_effect": (
+                                    "The interval places the measured effect "
+                                    "below the minimum reduction threshold."
+                                ),
+                                "inconclusive": (
+                                    "The maximum number of pairs was reached "
+                                    "without a decisive interval."
+                                ),
+                                "insufficient_measurements": (
+                                    "The maximum number of pairs was reached, "
+                                    "but too few produced valid energy values."
+                                ),
+                            }
+                            message = status_messages.get(
+                                evidence_status,
+                                "More paired measurements are needed.",
+                            )
+                            if evidence_status == "confirmed_reduction":
+                                st.success(message)
+                            elif evidence_status in {
+                                "below_minimum_effect",
+                                "insufficient_measurements",
+                            }:
+                                st.warning(message)
+                            else:
+                                st.info(message)
+
+                            lower = measured_validation.get("ci_lower_pct")
+                            upper = measured_validation.get("ci_upper_pct")
+                            mean_reduction = measured_validation.get(
+                                "geometric_mean_reduction_pct"
+                            )
+                            ci_text = (
+                                f"{lower:.2f}% to {upper:.2f}%"
+                                if lower is not None and upper is not None
+                                else "Not enough valid pairs"
+                            )
+                            a, b, c = st.columns(3)
+                            a.metric(
+                                "Paired geometric reduction",
+                                (
+                                    f"{mean_reduction:.2f}%"
+                                    if mean_reduction is not None
+                                    else "N/A"
+                                ),
+                            )
+                            b.metric("Adjusted confidence interval", ci_text)
+                            c.metric(
+                                "Valid pairs",
+                                str(measured_validation.get("paired_runs", 0)),
+                            )
+                            st.caption(
+                                "Original and optimized runs are paired by run "
+                                "number. The interval uses log energy ratios and "
+                                "a Bonferroni adjustment across sequential checks. "
+                                "The target is a measured reduction greater than "
+                                f"{measured_validation.get('minimum_reduction_pct', 3):.1f}%."
+                            )
                     else:
                         st.info(
                             "No saved code artifact exists for this task yet. "
@@ -782,3 +911,272 @@ with energy_tab:
 
         except Exception as exc:
             st.error(f"Could not load optimization results: {exc}")
+
+
+# ---------------------------------------------------------
+# LLM RESPONSE OPTIMIZATION
+# ---------------------------------------------------------
+with response_tab:
+    st.subheader("Find behavior-preserving code alternatives")
+    st.write(
+        "Paste Python code from an LLM, provide checks for its behavior, and "
+        "GreenMetricAI will generate alternatives, reject candidates that fail "
+        "those checks, and rank the survivors by predicted energy."
+    )
+    st.caption(
+        "A working square-sum example and its checks are prefilled. Add a "
+        "Gemini API key and confirm the code is trusted to enable the run button."
+    )
+
+    st.warning(
+        "Your code and checks will execute on this computer in a timed child "
+        "process. A timeout is not a security sandbox. Run only code you trust."
+    )
+
+    st.session_state.setdefault(
+        "response_optimizer_code",
+        "def square_sum(n):\n    return sum(i * i for i in range(n))",
+    )
+    st.session_state.setdefault(
+        "response_optimizer_checks",
+        "assert square_sum(3) == 5\nassert square_sum(10) == 285",
+    )
+    response_code = st.text_area(
+        "Python code to improve",
+        height=240,
+        key="response_optimizer_code",
+        placeholder="Paste the Python code returned by an LLM...",
+    )
+    if any(
+        marker in response_code.lower()
+        for marker in ("read_csv", "pandas", "dataframe", "groupby")
+    ):
+        st.warning(
+            "This looks like a data-processing script. GreenMetricAI's energy "
+            "model was trained on measured MBPP code snippets, not large pandas "
+            "pipelines, so treat its score as out-of-domain and verify changes "
+            "with CodeCarbon on the target workload."
+        )
+    response_checks = st.text_area(
+        "Behavior checks (required)",
+        height=140,
+        key="response_optimizer_checks",
+        help=(
+            "Write Python assertions that pass for the original code and every "
+            "acceptable alternative. The checks are run in a separate process."
+        ),
+    )
+    working_directory = st.text_input(
+        "Project directory for relative data paths",
+        value=os.getcwd(),
+        key="response_optimizer_working_directory",
+        help=(
+            "Choose the folder that contains paths referenced by your code, "
+            "such as an ml/ directory. The candidate and checks run with this "
+            "folder as their working directory."
+        ),
+    ).strip()
+    working_directory_valid = Path(working_directory).expanduser().is_dir()
+    if not working_directory_valid:
+        st.error("The project directory does not exist. Enter an existing folder.")
+    candidate_count = st.slider(
+        "Alternatives to generate",
+        min_value=1,
+        max_value=3,
+        value=3,
+        key="response_optimizer_count",
+    )
+    trusted_to_run = st.checkbox(
+        "I trust this code and these checks to run on my computer.",
+        key="response_optimizer_trusted",
+    )
+
+    configured_api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if configured_api_key.lower() in {
+        "your_key_here",
+        "your_api_key_here",
+        "replace_me",
+    }:
+        configured_api_key = ""
+    if configured_api_key:
+        api_key = configured_api_key
+        st.caption("Gemini API key loaded from the environment or .env file.")
+    else:
+        api_key = st.text_input(
+            "Gemini API key",
+            type="password",
+            key="response_optimizer_api_key",
+            help=(
+                "Used only for this Streamlit session. It is not saved to the "
+                "project files. You can also put GEMINI_API_KEY in a local .env file."
+            ),
+        ).strip()
+    api_key_ready = bool(api_key)
+    if model is None:
+        st.info("Load a compatible GreenMetricAI model to rank alternatives.")
+
+    requirements_missing = []
+    if not response_code.strip():
+        requirements_missing.append("paste Python code")
+    if not response_checks.strip():
+        requirements_missing.append("provide behavior checks")
+    if not api_key_ready:
+        requirements_missing.append("provide a Gemini API key")
+    if not trusted_to_run:
+        requirements_missing.append("confirm the code is trusted")
+    if model is None:
+        requirements_missing.append("load the GreenMetricAI model")
+    if not working_directory_valid:
+        requirements_missing.append("choose an existing project directory")
+    if requirements_missing:
+        st.caption("Before you can run it: " + "; ".join(requirements_missing) + ".")
+
+    run_optimizer = st.button(
+        "Generate and evaluate alternatives",
+        type="primary",
+        disabled=(
+            not response_code.strip()
+            or not response_checks.strip()
+            or not trusted_to_run
+            or not api_key_ready
+            or model is None
+            or not working_directory_valid
+        ),
+        key="response_optimizer_run",
+    )
+
+    if run_optimizer:
+        try:
+            from greenmetricai.optimizer import GeminiProvider
+            from greenmetricai.response_optimizer import (
+                explain_prediction,
+                generate_energy_alternatives,
+            )
+
+            with st.spinner(
+                f"Generating and checking {candidate_count} alternatives..."
+            ):
+                result = generate_energy_alternatives(
+                    response_code,
+                    response_checks,
+                    model=model,
+                    model_kind=model_kind,
+                    provider=GeminiProvider(api_key=api_key),
+                    candidate_count=candidate_count,
+                    working_directory=working_directory,
+                )
+                result["original_explanation"] = explain_prediction(
+                    response_code,
+                    model,
+                    model_kind,
+                )
+                for candidate in result["candidates"]:
+                    if candidate.get("passed_checks") and candidate.get(
+                        "predicted_energy_kwh"
+                    ) is not None:
+                        candidate["explanation"] = explain_prediction(
+                            candidate["code"],
+                            model,
+                            model_kind,
+                        )
+            st.session_state["response_optimizer_result"] = {
+                "source_code": response_code,
+                "checks": response_checks,
+                "candidate_count": candidate_count,
+                "working_directory": working_directory,
+                "result": result,
+            }
+        except Exception as exc:
+            st.session_state.pop("response_optimizer_result", None)
+            st.error(f"Could not evaluate alternatives: {exc}")
+
+    saved = st.session_state.get("response_optimizer_result")
+    if saved and (
+        saved["source_code"] == response_code
+        and saved["checks"] == response_checks
+        and saved.get("candidate_count") == candidate_count
+        and saved.get("working_directory", os.getcwd()) == working_directory
+    ):
+        result = saved["result"]
+        from greenmetricai.response_optimizer import explain_prediction
+
+        if "original_explanation" not in result:
+            result["original_explanation"] = explain_prediction(
+                result["original_code"],
+                model,
+                model_kind,
+            )
+        st.subheader("Original code baseline")
+        st.metric(
+            "Predicted energy per execution",
+            format_energy(result["original_energy_kwh"]),
+        )
+        st.caption(
+            "This is a model prediction, not a CodeCarbon measurement. "
+            "Passing the supplied checks does not prove equivalence for all inputs."
+        )
+        render_local_shap(
+            "Why did the model give the original code this score?",
+            result.get("original_explanation"),
+        )
+
+        ranked_number = result.get("recommended_number")
+        if ranked_number is None:
+            st.warning(
+                "No alternative both passed the supplied checks and received "
+                "a valid energy estimate. Keep the original code."
+            )
+
+        for candidate in result["candidates"]:
+            number = candidate["number"]
+            with st.expander(
+                f"Alternative {number}"
+                + (" · lowest predicted energy" if number == ranked_number else ""),
+                expanded=(number == ranked_number),
+            ):
+                if not candidate.get("passed_checks"):
+                    st.error(candidate.get("reason", "Candidate was rejected."))
+                elif candidate.get("predicted_energy_kwh") is None:
+                    st.warning(candidate.get("reason", "Energy estimate unavailable."))
+                else:
+                    if "explanation" not in candidate:
+                        candidate["explanation"] = explain_prediction(
+                            candidate["code"],
+                            model,
+                            model_kind,
+                        )
+                    reduction = candidate["predicted_reduction_pct"]
+                    st.success("Supplied checks passed.")
+                    a, b = st.columns(2)
+                    a.metric(
+                        "Predicted energy per execution",
+                        format_energy(candidate["predicted_energy_kwh"]),
+                    )
+                    b.metric(
+                        "Predicted change vs original",
+                        f"{reduction:+.2f}%",
+                        help="Positive means lower predicted energy.",
+                    )
+                    if reduction <= 0:
+                        st.info(
+                            "This candidate passed the checks, but its predicted "
+                            "energy is not lower than the original."
+                        )
+                    st.code(candidate["code"], language="python")
+                    render_local_shap(
+                        f"Why did the model score alternative {number} this way?",
+                        candidate.get("explanation"),
+                    )
+                    st.download_button(
+                        "Download this alternative",
+                        data=candidate["code"],
+                        file_name=f"greenmetricai_alternative_{number}.py",
+                        mime="text/x-python",
+                        key=f"download_response_candidate_{number}",
+                    )
+
+        st.caption(
+            "The alternatives are ranked using GreenMetricAI predictions only. "
+            "A measured energy reduction and an LLM-generation break-even estimate "
+            "are not available in this workflow yet."
+        )

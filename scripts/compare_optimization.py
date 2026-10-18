@@ -11,9 +11,13 @@ from greenmetricai.mbpp import build_repeated_code, load_mbpp
 from greenmetricai.optimizer import (GeminiProvider, GreenMetricEnergyModel,
                                      optimize_mbpp_task,
                                      validate_mbpp_candidate)
+from greenmetricai.paired_validation import summarize_paired_energy
 
 TARGET_SECONDS = 5.0
-MEASUREMENTS_PER_VERSION = 5
+MINIMUM_PAIRED_RUNS = 5
+MAXIMUM_PAIRED_RUNS = 15
+MINIMUM_MEASURED_REDUCTION = 0.03
+FAMILY_CONFIDENCE = 0.95
 COUNTRY = "IND"
 
 
@@ -80,6 +84,14 @@ def main():
         default="data/processed/optimization_comparison.csv",
         help="Output CSV path.",
     )
+    parser.add_argument(
+        "--reuse-saved-candidate",
+        action="store_true",
+        help=(
+            "Measure the saved task artifact instead of generating a new "
+            "candidate with Gemini. Requires optimization_code_task_<id>.json."
+        ),
+    )
     args = parser.parse_args()
 
     tasks = load_mbpp()
@@ -100,17 +112,43 @@ def main():
             f"Original task failed validation: {original_reason}"
         )
 
-    print(f"Optimizing MBPP task {args.task_id}...")
-    model = GreenMetricEnergyModel()
-    provider = GeminiProvider()
-
-    optimization = optimize_mbpp_task(
-        original_task,
-        model=model,
-        provider=provider,
+    artifact_path = Path(
+        f"data/processed/optimization_code_task_{args.task_id}.json"
     )
+    if args.reuse_saved_candidate:
+        if not artifact_path.exists():
+            raise FileNotFoundError(
+                f"Saved candidate not found: {artifact_path}. "
+                "Run without --reuse-saved-candidate to generate one."
+            )
+        code_artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+        if code_artifact.get("task_id") != args.task_id:
+            raise ValueError(
+                f"Saved candidate task ID does not match {args.task_id}."
+            )
+        if code_artifact.get("original_code", "").strip() != original_task["code"].strip():
+            raise ValueError(
+                "Saved candidate baseline does not match the current MBPP task."
+            )
+        candidate_code = code_artifact.get("optimized_code", "")
+        if not candidate_code.strip():
+            raise ValueError("Saved candidate contains no optimized code.")
+        optimization = {
+            "optimized_code": candidate_code,
+            "predicted_energy_kwh": code_artifact.get("predicted_energy_kwh"),
+        }
+        print(f"Reusing saved candidate from {artifact_path}.")
+    else:
+        print(f"Optimizing MBPP task {args.task_id}...")
+        model = GreenMetricEnergyModel()
+        provider = GeminiProvider()
+        optimization = optimize_mbpp_task(
+            original_task,
+            model=model,
+            provider=provider,
+        )
+        candidate_code = optimization["optimized_code"]
 
-    candidate_code = optimization["optimized_code"]
     candidate_task = dict(original_task)
     candidate_task["code"] = candidate_code
 
@@ -138,9 +176,6 @@ def main():
         ),
     }
 
-    artifact_path = Path(
-        f"data/processed/optimization_code_task_{args.task_id}.json"
-    )
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
     artifact_path.write_text(
         json.dumps(code_artifact, indent=2),
@@ -156,8 +191,10 @@ def main():
 
     rows = []
 
-    # Alternate order between runs to reduce simple order bias.
-    for run_number in range(1, MEASUREMENTS_PER_VERSION + 1):
+    # Alternate order within each pair, then stop when the paired evidence
+    # distinguishes a >=3% reduction from smaller effects, up to the cap.
+    evidence = None
+    for run_number in range(1, MAXIMUM_PAIRED_RUNS + 1):
         versions = [
             ("original", original_task),
             ("optimized", candidate_task),
@@ -169,7 +206,7 @@ def main():
             print(
                 f"Measuring task={args.task_id}, "
                 f"version={version}, run={run_number}/"
-                f"{MEASUREMENTS_PER_VERSION}"
+                f"{MAXIMUM_PAIRED_RUNS}"
             )
             row = measure_version(
                 task,
@@ -187,6 +224,35 @@ def main():
                 "predicted_energy_kwh"
             )
             rows.append(row)
+
+        evidence = summarize_paired_energy(
+            rows,
+            minimum_pairs=MINIMUM_PAIRED_RUNS,
+            maximum_pairs=MAXIMUM_PAIRED_RUNS,
+            minimum_reduction=MINIMUM_MEASURED_REDUCTION,
+            family_confidence=FAMILY_CONFIDENCE,
+        )
+        print(
+            "Paired geometric energy reduction: "
+            f"{evidence['geometric_mean_reduction_pct']!s}% | "
+            f"family-wise CI: [{evidence['ci_lower_pct']!s}%, "
+            f"{evidence['ci_upper_pct']!s}%] | "
+            f"pairs={evidence['paired_runs']} | "
+            f"status={evidence['status']}"
+        )
+        if evidence["status"] in {
+            "confirmed_reduction",
+            "below_minimum_effect",
+            "inconclusive",
+        }:
+            break
+
+    # Store measurement evidence alongside the exact source used for the run.
+    code_artifact["measured_validation"] = evidence
+    artifact_path.write_text(
+        json.dumps(code_artifact, indent=2),
+        encoding="utf-8",
+    )
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)

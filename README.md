@@ -102,6 +102,30 @@ python scripts/explain.py --data data/processed/mbpp_measured.csv
 streamlit run app.py
 ```
 
+The **Optimize LLM code** tab accepts Python code and behavior checks, asks
+Gemini for up to three alternatives, runs the original and candidates against
+those checks, and ranks passing candidates by GreenMetricAI's predicted energy.
+The `.env.example` key is a placeholder; the app reads `GEMINI_API_KEY` from
+the process environment or a project `.env` file. Copy `.env.example` to `.env`
+and replace the placeholder with your Gemini API key, or paste the key into the
+masked field on the optimizer page. The page never writes a key entered there
+to disk. In PowerShell, you can also set it before launch:
+
+```powershell
+$env:GEMINI_API_KEY = "your_key_here"
+.\.venv\Scripts\python.exe -m streamlit run app.py
+```
+
+The optimizer also computes local SHAP values for the original and accepted
+alternatives. These feature contributions explain the Random Forest's
+log-energy prediction; they do not explain measured energy or establish causal
+effects. The separate SHAP tab provides global feature importance across the
+available measured examples.
+
+The current workflow reports predictions, not measured savings, and does not
+estimate the LLM call's energy or water use. Only execute code you trust; the
+check runner uses a timeout but is not a security sandbox.
+
 ## Important measurement design
 
 Very short functions can consume too little energy for stable measurement. The collector therefore repeats the **real benchmark tests** many times inside the measurement window. The source code and test cases remain real; only the number of repetitions is an experimental measurement parameter.
@@ -115,6 +139,29 @@ For publication-quality results:
 - use medians and confidence intervals,
 - randomize task order,
 - validate across more than one machine if possible.
+
+### Sequential paired energy validation
+
+`python -m scripts.compare_optimization` uses paired runs to decide whether a
+candidate's measured energy change is larger than ordinary run-to-run noise.
+Each pair measures the original and optimized code with the same duration
+protocol; execution order alternates between pairs. It starts with five pairs
+and can collect up to fifteen.
+
+For each valid pair, the validator computes the log ratio
+`log(optimized_energy / original_energy)`. It builds a Student-t interval on
+those paired log ratios and applies a Bonferroni adjustment for the planned
+sequential checks. It stops when the interval establishes either a measured
+reduction above 3% or an effect below that threshold. If neither conclusion is
+supported after fifteen valid pairs, it reports the result as inconclusive; if
+too few runs return valid energy readings, it reports insufficient
+measurements. Results are saved in `measured_validation` in the task's JSON
+artifact and shown on the Energy Validation dashboard.
+
+This is evidence for the measured task and machine, not proof that every
+program will save energy. The interval assumes the paired log ratios are
+approximately independent and normally distributed; repeat the experiment in
+independent sessions and on other hardware before making broad claims.
 
 ## Security
 

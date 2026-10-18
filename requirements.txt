@@ -1,6 +1,7 @@
 numpy>=1.26
 pandas>=2.2
 scikit-learn>=1.5
+scipy>=1.11
 xgboost>=2.1
 shap>=0.46
 streamlit>=1.39
@@ -12,3 +13,4 @@ joblib>=1.4
 openai>=1.50
 pytest>=8.0
 google-genai
+python-dotenv>=1.0

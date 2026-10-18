@@ -22,10 +22,10 @@ GEMINI_MODEL = "gemini-3.6-flash"
 class GeminiProvider:
     """Generate optimization candidates using the Gemini API."""
 
-    def __init__(self, model=None, max_retries=3, retry_delay=5):
+    def __init__(self, model=None, max_retries=3, retry_delay=5, api_key=None):
         from google import genai
 
-        key = os.getenv("GEMINI_API_KEY")
+        key = api_key or os.getenv("GEMINI_API_KEY")
         if not key:
             raise RuntimeError("GEMINI_API_KEY is not configured.")
 

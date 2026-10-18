@@ -6,5 +6,15 @@
   "original_tests_passed": true,
   "candidate_tests_passed": true,
   "candidate_validation_reason": null,
-  "predicted_energy_kwh": 5.6506356868028986e-12
+  "predicted_energy_kwh": 5.6506356868028986e-12,
+  "measured_validation": {
+    "paired_runs": 15,
+    "attempted_pairs": 15,
+    "minimum_reduction_pct": 3.0,
+    "family_confidence_pct": 95.0,
+    "geometric_mean_reduction_pct": 0.6126613851867635,
+    "ci_lower_pct": -33.28595112163124,
+    "ci_upper_pct": 25.889840648535902,
+    "status": "inconclusive"
+  }
 }

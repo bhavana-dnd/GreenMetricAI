@@ -223,7 +223,12 @@ with st.sidebar:
             st.error(f"Could not load results: {exc}")
     else:
         source_name, results = None, None
-        st.info("No optimization results found yet.")
+        st.info(
+            "No optimization results found yet. Run "
+            "`python -m scripts.compare_optimization --task-id 2 "
+            "--reuse-saved-candidate` to create a fresh local benchmark from "
+            "the saved candidate."
+        )
     st.divider()
     st.markdown("**System status**")
     st.markdown(

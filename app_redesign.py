@@ -523,7 +523,12 @@ source = OPTIMIZATION_DATA if os.path.exists(OPTIMIZATION_DATA) else (
 
 with st.expander("📊 How well does this work? Results on benchmark tasks"):
     if source is None:
-        st.info("No benchmark results yet. Run `python -m scripts.compare_optimization --task-id 2`.")
+        st.info(
+            "No benchmark results yet. Run "
+            "`python -m scripts.compare_optimization --task-id 2 "
+            "--reuse-saved-candidate` to measure the saved candidate and "
+            "create the local comparison CSV."
+        )
     else:
         df = pd.read_csv(source)
         df["version"] = df["version"].astype(str).str.lower()

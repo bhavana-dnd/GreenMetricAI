@@ -1,5 +1,14 @@
 # Minimal dependencies needed to run the project unit tests in GitHub Actions.
-joblib>=1.4
+numpy>=1.26
 pandas>=2.2
-pytest>=8.0
+scikit-learn>=1.5
+xgboost>=2.1
+shap>=0.46
+streamlit>=1.39
+plotly>=5.24
 radon>=6.0
+codecarbon>=3.0
+psutil>=6.0
+joblib>=1.4
+openai>=1.50
+pytest>=8.0

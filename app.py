@@ -182,8 +182,8 @@ if model is None:
     if model_error:
         st.caption(f"Model loading detail: {model_error}")
 
-analyze_tab, shap_tab, energy_tab, project_benchmark_tab, response_tab = st.tabs(
-     [
+analyze_tab, shap_tab, energy_tab, project_benchmark_tab, response_tab, ledger_tab = st.tabs(
+    [
         "Analyze",
         "SHAP",
         "Energy Validation",

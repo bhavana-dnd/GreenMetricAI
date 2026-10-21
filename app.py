@@ -183,12 +183,13 @@ if model is None:
         st.caption(f"Model loading detail: {model_error}")
 
 analyze_tab, shap_tab, energy_tab, project_benchmark_tab, response_tab = st.tabs(
-    [
+     [
         "Analyze",
         "SHAP",
         "Energy Validation",
         "Project Benchmark",
         "Optimize LLM code",
+        "Optimization Ledger",
     ]
 )
 
@@ -1573,3 +1574,93 @@ with response_tab:
             "A measured energy reduction and an LLM-generation break-even estimate "
             "are not available in this workflow yet."
         )
+        
+# ---------------------------------------------------------
+# OPTIMIZATION LEDGER
+# ---------------------------------------------------------
+with ledger_tab:
+    st.subheader("📒 Optimization Ledger")
+    st.write(
+        "Review and save LLM optimization attempts, including "
+        "behavior-check results and predicted energy changes."
+    )
+
+    saved = st.session_state.get("response_optimizer_result")
+    records = st.session_state.setdefault("optimization_ledger", [])
+
+    if saved:
+        result = saved["result"]
+        st.markdown("### Latest optimization result")
+
+        st.metric(
+            "Original predicted energy",
+            format_energy(result.get("original_energy_kwh"))
+        )
+
+        candidates = result.get("candidates", [])
+        if candidates:
+            candidate_options = list(range(len(candidates)))
+
+            selected = st.selectbox(
+                "Select an alternative to record",
+                candidate_options,
+                format_func=lambda i: (
+                    f"Alternative {candidates[i].get('number', i + 1)}"
+                ),
+                key="ledger_candidate_select",
+            )
+
+            candidate = candidates[selected]
+            st.write(
+                "Behavior checks:",
+                "Passed" if candidate.get("passed_checks") else "Failed"
+            )
+            st.write(
+                "Predicted energy:",
+                format_energy(candidate.get("predicted_energy_kwh"))
+            )
+            st.write(
+                "Predicted reduction:",
+                f"{candidate.get('predicted_reduction_pct', 0):.2f}%"
+            )
+
+            if st.button("Save to ledger", type="primary"):
+                records.append({
+                    "attempt": len(records) + 1,
+                    "alternative": candidate.get("number", selected + 1),
+                    "behavior_checks_passed": candidate.get("passed_checks"),
+                    "original_predicted_energy_kwh": result.get(
+                        "original_energy_kwh"
+                    ),
+                    "optimized_predicted_energy_kwh": candidate.get(
+                        "predicted_energy_kwh"
+                    ),
+                    "predicted_reduction_pct": candidate.get(
+                        "predicted_reduction_pct"
+                    ),
+                    "optimized_code": candidate.get("code", ""),
+                })
+                st.success("Optimization recorded in this session.")
+    else:
+        st.info(
+            "Run an optimization in the Optimize LLM code tab first."
+        )
+
+    st.markdown("### Saved records")
+
+    if records:
+        ledger_df = pd.DataFrame(records)
+        st.dataframe(
+            ledger_df.drop(columns=["optimized_code"], errors="ignore"),
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.download_button(
+            "Download ledger as CSV",
+            data=ledger_df.to_csv(index=False),
+            file_name="greenmetricai_optimization_ledger.csv",
+            mime="text/csv",
+        )
+    else:
+        st.info("No optimization attempts have been saved yet.")
+
